@@ -1,37 +1,41 @@
-# Ecological Data Analysis Tool
+# Ecological Data Analysis Agent
 
-A streamlined, narrative-driven tool for analyzing ecological and marine data with real database connectivity and human-readable explanations.
+An advanced, AI-powered data analysis agent for ecological research with SQL database connectivity, Python analysis capabilities, and comprehensive visualization tools.
 
 ## 📋 Overview
 
 This tool provides an intuitive way to analyze ecological data by:
 
-- Creating **narrative, human-readable analysis plans** that anyone can understand and approve
-- Connecting to **real databases** and performing genuine statistical analysis (no mock data!)
-- Providing **verbose, step-by-step terminal output** showing exactly what's happening during analysis
-- Generating meaningful insights from actual ecological monitoring data
+- Creating **multi-step analysis plans** that orchestrate complex workflows
+- Connecting to **SQL databases** and performing structured data retrieval
+- Running **Python code** for advanced statistical analysis and data manipulation
+- Generating **data visualizations** including bar charts, scatter plots, and box plots
+- Providing a **clean, user-friendly interface** with elegant loading animations
 
 Designed specifically for marine ecological research, this tool helps researchers and stakeholders understand trends in fish biomass, abundance, diversity, and other ecological metrics across different regions.
 
 ## 🌟 Key Features
 
-- **📋 Narrative Plans**: Analysis plans written in plain English that non-technical stakeholders can understand and approve
-- **🔍 Verbose Terminal Output**: Real-time step-by-step progress with clear status messages during analysis
-- **🗄️ Real Database Analysis**: Connects to actual ecological databases and performs genuine statistical analysis
-- **📊 Trend Analysis**: Calculates real temporal trends, percentage changes, and statistical significance
-- **🎯 Region-Specific**: Supports analysis of specific marine regions (La Paz, Cabo Pulmo, Gulf of California, etc.)
-- **📈 Multiple Metrics**: Analyzes biomass, abundance, density, and diversity metrics
+- **🧠 Master Orchestrator Architecture**: Formulates multi-step plans to tackle complex analytical questions
+- **🔍 Structured SQL Data Retrieval**: Executes SQL queries against ecological databases
+- **🐍 Python Execution Engine**: Runs Python code for advanced statistical analysis and data transformation
+- **📊 Visualization Suite**: Creates bar charts, scatter plots, and box plots based on SQL query results
+- **💡 Self-Planning Workflow**: Determines the best sequence of tools to answer multi-part questions
+- **🖥️ User-Friendly Interface**: Clean terminal UI with loading animations and concise responses
+- **🎯 Region-Specific Analysis**: Supports filtering by specific marine regions (La Paz, Cabo Pulmo, etc.)
+- **📈 Multiple Ecological Metrics**: Analyzes biomass, abundance, density, and diversity metrics
 
 ## 🛠️ Project Structure
 
-```
+```bash
 chatMPA_deep_research/
-├── main.py              # Main analysis tool with narrative interface
-├── tools.py             # Database and statistical analysis utilities
+├── main.py              # Main agent with SQL, Python, and visualization capabilities
+├── tools.py             # Database and analysis utilities
 ├── requirements.txt     # Python dependencies
 ├── .env                 # Database configuration (not in repo)
-├── .gitignore          # Git ignore file
-└── README.md           # This documentation
+├── .gitignore           # Git ignore file
+├── *.png                # Generated visualization images
+└── README.md            # This documentation
 ```
 
 ## ⚙️ Installation
@@ -40,7 +44,8 @@ chatMPA_deep_research/
 
 - Python 3.8 or higher
 - Access to an ecological database (PostgreSQL, MySQL, or SQLite)
-- OpenAI API key for natural language processing
+- OpenAI API key for LLM capabilities
+- Python libraries: langchain, pandas, seaborn, matplotlib
 
 ### Setup Instructions
 
@@ -91,43 +96,62 @@ The tool will start with a friendly interface showing examples of questions you 
 
 ### Example Analysis Workflow
 
-1. **Ask a Question:**
-   ```
-   🤔 Your Question: How has fish biomass changed in La Paz?
+1. **Start the Agent:**
+
+   ```bash
+   python main.py
    ```
 
-2. **Review the Narrative Plan:**
-   The tool creates a human-readable plan explaining:
-   - What you're really asking
-   - What steps will be taken
-   - Why this analysis matters
-   - What you can expect to learn
 
-3. **Approve and Execute:**
-   ```
-   🚀 Execute this analysis plan? (yes/no): yes
+2. **Ask a Question:**
+
+   ```text
+   🤔 Your Question: What's the relationship between size and biomass for triggerfish?
    ```
 
-4. **Watch Real-Time Analysis:**
-   See verbose output as the tool:
+3. **Agent Plans and Executes:**
+   The agent creates a multi-step plan:
+   - Formulates SQL queries to retrieve relevant data
+   - Determines which visualization type is most appropriate
+   - Sequences tools in the optimal order
+
+4. **Watch the Analysis:**
+   A spinner animation shows progress while the agent:
    - 🔌 Connects to your database
-   - 🔍 Explores table structure
-   - 📊 Queries real data
-   - 📈 Calculates trends and statistics
+   - 🔍 Executes SQL queries
+   - 🐍 Runs Python code as needed
+   - 📊 Generates appropriate visualizations
 
-5. **Get Meaningful Results:**
-   Receive a comprehensive report with:
-   - Key findings from real data
-   - Statistical analysis and trends
-   - Discussion of ecological implications
+5. **Get Comprehensive Results:**
+   Receive detailed answers including:
+   - Key findings from the data
+   - Generated visualization images
+   - Statistical insights and interpretations
 
 ### Example Questions
 
-- "How has fish biomass changed in La Paz?"
-- "What are the abundance trends in Cabo Pulmo?"
-- "Show me diversity patterns in the Gulf of California"
-- "Has fish density increased in Loreto over time?"
-- "Compare biomass trends between La Paz and Cabo Pulmo"
+#### SQL Queries
+
+- "How many unique species are in the database?"
+- "What are the top 5 most observed species?"
+- "What's the average biomass by location?"
+
+#### Python Analysis
+
+- "Calculate the correlation between size and biomass for parrotfish"
+- "What's the statistical significance of biomass differences between locations?"
+- "Generate summary statistics for all species in Cabo Pulmo"
+
+#### Visualizations
+
+- "Create a bar chart showing average biomass by species"
+- "Make a scatter plot of size vs. biomass for triggerfish"
+- "Show me a box plot of fish sizes by location"
+
+#### Complex Multi-Step Analysis
+
+- "Show me a scatter plot of size vs. biomass for the most observed species and calculate the correlation coefficient"
+- "What are the three largest fish species by average size, and create box plots showing their size distributions by location"
 
 ## 🔧 Technical Details
 
@@ -142,16 +166,25 @@ The tool automatically detects and adapts to your database structure:
 
 ### Analysis Capabilities
 
-- **Statistical Analysis:** Mean, standard deviation, min/max, trend calculations
-- **Temporal Trends:** Linear regression, slope calculation, percentage change
-- **Regional Filtering:** Flexible region matching (exact and partial matches)
-- **Data Validation:** Automatic null value handling and data type conversion
+- **SQL Analysis:** Complex queries, aggregations, filters, joins, and subqueries
+- **Python Analysis:** Advanced statistical analysis with pandas, numpy, scipy
+- **Visualization Types:**
+  - **Bar Charts:** For comparing values across categories
+  - **Scatter Plots:** For exploring relationships between two numerical variables (with regression lines)
+  - **Box Plots:** For showing distributions across categories (with quartiles and outliers)
+- **Multi-Step Reasoning:** Planning and executing complex analytical workflows
+- **Tool Orchestration:** Selecting and sequencing appropriate tools based on the task
 
 ### AI Integration
 
-- **Natural Language Processing:** Uses OpenAI GPT-4 for plan generation and interpretation
-- **Narrative Generation:** Creates human-readable explanations of technical processes
-- **Adaptive Querying:** Dynamically constructs SQL queries based on database structure
+- **Large Language Model:** Uses OpenAI models for planning and analysis
+- **LangChain Framework:** Integrates various tools and capabilities
+- **Agent Architecture:**
+  - **Master Orchestrator:** Plans and coordinates analytical workflows
+  - **SQL Tool:** Structured data retrieval from databases
+  - **Python REPL Tool:** Executes Python code for advanced analysis
+  - **Visualization Tools:** Creates appropriate charts based on data characteristics
+- **Self-Improving:** Learns from interactions to provide better analysis
 
 ## 🔒 Security Considerations
 
@@ -165,27 +198,34 @@ The tool automatically detects and adapts to your database structure:
 
 ### Common Issues
 
-**"No database connection found"**
+#### No database connection found
+
 - Check that your `.env` file exists and contains valid `DATABASE_URL`
 - Verify database credentials and network connectivity
 
-**"Table not found or not accessible"**
+#### Table not found or not accessible
+
 - Ensure the table name exists in your database
 - Check database permissions for the user account
 
-**"No column found for metric"**
+#### No column found for metric
+
 - The tool looks for columns containing keywords like 'biomass', 'abundance', etc.
 - You may need to rename columns or specify them more clearly
 
-**OpenAI API errors**
+#### OpenAI API errors
+
 - Verify your `OPENAI_API_KEY` is valid and has sufficient credits
 - Check your internet connection
 
 ## 📚 References
 
 - [LangChain Documentation](https://python.langchain.com/docs/get_started/introduction)
+- [LangChain SQL Tools](https://python.langchain.com/docs/modules/agents/toolkits/sql_database)
 - [OpenAI API Documentation](https://platform.openai.com/docs)
-- [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
+- [Pandas Documentation](https://pandas.pydata.org/docs/)
+- [Seaborn Documentation](https://seaborn.pydata.org/)
+- [Matplotlib Documentation](https://matplotlib.org/stable/contents.html)
 
 ## 📝 License
 
@@ -193,4 +233,6 @@ This project is designed for ecological research and follows best practices for 
 
 ---
 
-*This tool follows best practices for code organization, documentation, and reproducibility as defined in the project development rules.*
+### Note
+
+*This agent follows best practices for code organization, documentation, and reproducibility as defined in the project development rules. Updated: July 30, 2025*
