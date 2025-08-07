@@ -8,11 +8,12 @@ from datetime import datetime
 import re
 from typing import Optional, Dict, List, Union, Tuple, Any
 
-# Import our SQL formatter and data validator
+# Import our SQL formatter and data validator from tools folder
+sys.path.append(os.path.join(os.path.dirname(__file__), 'tools'))
 from sql_formatter import format_sql_for_humans, translate_sql_to_english
 from data_validator import DataValidator
 
-# Import our new statistical analysis and PDF report modules
+# Import statistical analysis, PDF reports, and Phase 3 modules from tools folder
 try:
     from statistical_analysis import (
         perform_ttest, perform_anova, perform_correlation_analysis,
@@ -29,6 +30,16 @@ except ImportError as e:
     print(f"Warning: Advanced statistical modules not available: {e}")
     ADVANCED_STATS_AVAILABLE = False
 
+# Import Phase 3 components
+try:
+    from insights_engine import InsightsEngine
+    from report_generator import ReportGenerator, generate_quick_report, generate_insights_report
+    PHASE3_AVAILABLE = True
+    print("Phase 3 Insights Engine and Report Generator loaded successfully.")
+except ImportError as e:
+    print(f"Warning: Phase 3 modules not available: {e}")
+    PHASE3_AVAILABLE = False
+
 # Basic dependencies that should be available
 try:
     import pandas as pd
@@ -41,6 +52,26 @@ try:
     import matplotlib.pyplot as plt
     import seaborn as sns
     VISUALIZATION_AVAILABLE = True
+    
+    # Try importing advanced visualization components from tools folder
+    try:
+        from visualization_agent import VisualizationAgent
+        from visualization_factory import VisualizationFactory
+        from visualization_integration import (
+            integrate_visualization_system, 
+            initialize_visualization_system
+        )
+        from natural_viz_tool import (
+            create_natural_viz_tool,
+            get_natural_viz_tool_description
+        )
+        ADVANCED_VIZ_AVAILABLE = True
+        NATURAL_VIZ_AVAILABLE = True
+        print("Advanced visualization components loaded successfully.")
+    except ImportError as e:
+        ADVANCED_VIZ_AVAILABLE = False
+        NATURAL_VIZ_AVAILABLE = False
+        print(f"Warning: Advanced visualization not available: {e}")
 except ImportError:
     print("Warning: matplotlib/seaborn not installed. Visualization capabilities will be disabled.")
     VISUALIZATION_AVAILABLE = False
@@ -90,9 +121,13 @@ except ImportError as e:
 SCHEMA_DESCRIPTION = """ 
 This is a comprehensive dataset from a Long-Term Ecological Monitoring (LTEM) program for coral reef ecosystems. 
 
-## `ltem_historical_database` Table 
-This table is the foundational observational log. Each row represents a specific survey entry where organisms of the same size were recorded within a transect at a certain depth (Depth and Depth2). 
+## `ltem_optimized_regions` Table 
+This table is an optimized subset of the historical observational log containing only data from Loreto, La Paz, and Cabo Pulmo regions. Each row represents a specific survey entry where organisms of the same size were recorded within a transect at a certain depth (Depth and Depth2). 
 - **Purpose:** To log what species were seen, where, when, and in what quantity/size. 
+- **Regions Filter:** Only contains data from Loreto, La Paz, and Cabo Pulmo.
+- **Optimizations Applied:** 
+  - Removed columns: `bleaching_coverage`, `Functional_groups`, and `Protection_status` 
+  - Reef names formatted: underscores replaced with spaces, words capitalized (e.g., "LOS_ISLOTES" → "Los Islotes")
 - **Key Columns:** 
 - `Label`: Has two factors, "INV" and "PEC", that represent Invertebrate and Fish surveys, respectively. 
 - `Taxa1`, `Taxa2`, `Phylum`, `Species`, `Family`, `Genus`: Taxonomic information of the species recorded. 
@@ -103,9 +138,9 @@ This table is the foundational observational log. Each row represents a specific
 - `Quantity`: The abundance, i.e., how many organisms of that size were counted within a transect. When abundance is called, you should divide this for the Area to get org/m2. 
 - `Size`: The size class of the organisms. The unit is cm. 
 - `Biomass`: Fish biomass (not available for invertebrates), calculated using size, quantity, and growth parameters. The unit is ton/ha. 
-- `MPA`, `Protection_status`: Conservation status of the location. 
-- `bleaching_coverage`: A key environmental indicator for coral health. 
-- `TrophicLevelF`, `TrophicLevel`, `TrophicGroup`, `Functional_groups`: Functional traits from trophic levels in factor, number, groups, and functional groups. 
+- `MPA`: Conservation status of the location. 
+
+- `TrophicLevelF`, `TrophicLevel`, `TrophicGroup`: Functional traits from trophic levels in factor, number, and groups. 
 - `Area`: The area of the transect used. The unit is m2. 
 
 --- 
@@ -165,17 +200,22 @@ class Spinner:
                 sys.stdout.flush()
                 time.sleep(0.1)
 
-# --- Optimized system prompt to prevent token overflow ---
+# --- Concise system prompt to prevent token overflow ---
 SYSTEM_PROMPT = """
-You are an ecological data analyst for Gulf of California coral reef monitoring data.
+You are an AI ecological data analyst for Gulf of California coral reef monitoring.
 
-**Key Rules:**
-1. Use proper scientific terminology and data-driven analysis
-2. For density calculations: use `calculate_average_density` tool
-3. For statistical tests: use `perform_ttest`, `perform_anova`, `perform_correlation_analysis`, `perform_regression_analysis`, `perform_nonparametric_test`
-4. For reports: use `generate_pdf_report`
-5. Report "Average Density" not "Total" values
-6. Check statistical assumptions before selecting tests
+**Core Capabilities:**
+- SQL database queries and statistical analysis
+- Automated insights discovery (trends, anomalies, correlations)
+- Advanced visualizations and comprehensive reports
+- Publication-ready PDF and HTML report generation
+
+**Analysis Guidelines:**
+1. Use scientific terminology and validate statistical significance
+2. Create clear visualizations with proper labels
+3. Consider temporal/spatial patterns
+4. Generate automated insights when analyzing large datasets
+5. Provide comprehensive reports for complex analyses
 """
 
 # Only try to create database connection if SQLAlchemy is available
@@ -187,6 +227,17 @@ if DATABASE_AVAILABLE and LANGCHAIN_AVAILABLE:
         DATABASE_URL = os.getenv("DATABASE_URL")
         if DATABASE_URL:
             engine = create_engine(DATABASE_URL)
+            
+            # Initialize advanced visualization system if available
+            viz_components = None
+            advanced_viz_tool_func = None
+            if 'ADVANCED_VIZ_AVAILABLE' in globals() and ADVANCED_VIZ_AVAILABLE:
+                try:
+                    # Pass the database engine to the visualization system
+                    advanced_viz_tool_func, advanced_viz_description, viz_components = integrate_visualization_system(engine)
+                    print("Advanced visualization system initialized successfully.")
+                except Exception as e:
+                    print(f"Warning: Could not initialize advanced visualization system: {e}")
             db = SQLDatabase(engine)
             DATABASE_AVAILABLE = True
             print(f"Connected to database at {DATABASE_URL}")
@@ -206,6 +257,10 @@ else:
 # --- LLM Initialization ---
 llm = None
 prompt = None
+
+# Note: Using optimized database table (ltem_optimized_regions) with only Loreto, La Paz, and Cabo Pulmo regions
+# This helps prevent token limit issues by reducing the dataset size and columns
+# Optimizations: removed bleaching_coverage, Functional_groups, Protection_status columns and formatted Reef names
 
 if LANGCHAIN_AVAILABLE:
     try:
@@ -360,7 +415,7 @@ def calculate_average_density(
         {group_by},
         SUM({metric}) as transect_total
     FROM 
-        ltem_historical_database
+        ltem_optimized_regions
     WHERE 
         {where_clause}
     GROUP BY 
@@ -404,7 +459,7 @@ def calculate_average_density(
                 avg_area = 100  # Default value
                 
                 # Try to get actual area
-                avg_area_query = "SELECT AVG(Area) as avg_area FROM ltem_historical_database WHERE Area > 0"
+                avg_area_query = "SELECT AVG(Area) as avg_area FROM ltem_optimized_regions WHERE Area > 0"
                 avg_area_result = pd.read_sql(avg_area_query, engine)
                 
                 if not avg_area_result.empty and avg_area_result['avg_area'].iloc[0] > 0:
@@ -834,7 +889,7 @@ charting_tool = Tool(
     - title: Title for the chart (required)
     - filename: Name of the output file (optional, default: chart.png)
     
-    Example: {"query": "SELECT Species, AVG(Biomass) FROM ltem_historical_database GROUP BY Species LIMIT 5", "chart_type": "bar", "title": "Average Biomass of Top 5 Species", "filename": "biomass_chart.png"}
+    Example: {"query": "SELECT Species, AVG(Biomass) FROM ltem_optimized_regions GROUP BY Species LIMIT 5", "chart_type": "bar", "title": "Average Biomass of Top 5 Species", "filename": "biomass_chart.png"}
     """
 )
 
@@ -1297,18 +1352,39 @@ else:
     print("Database tools are not available due to missing dependencies.")
 
 # Add visualization tool if all required dependencies are available
-if LANGCHAIN_AVAILABLE and VISUALIZATION_AVAILABLE and DATABASE_AVAILABLE:
-    try:
-        charting_tool = Tool(
-            name="create_chart",
-            func=plotting_tool_wrapper(create_chart),
-            description="""Use this to create a visualization and save it as a file.
-            It requires a SQL query, a chart_type, a title, and a filename."""
-        )
-        all_tools.append(charting_tool)
-        print("Added visualization tool.")
-    except Exception as e:
-        print(f"Could not create visualization tool: {e}")
+if LANGCHAIN_AVAILABLE and VISUALIZATION_AVAILABLE:
+    # Add the charting tool
+    charting_tool = Tool(
+        name="create_chart",
+        func=create_chart,
+        description="Creates a chart from SQL query results. Parameters: query (SQL to execute), chart_type (bar, line, scatter), title, filename"
+    )
+    all_tools.append(charting_tool)
+    
+    # Add advanced visualization tool if available
+    if 'ADVANCED_VIZ_AVAILABLE' in globals() and ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func:
+        try:
+            advanced_viz_tool = Tool(
+                name="create_advanced_visualization",
+                func=advanced_viz_tool_func,
+                description=advanced_viz_description
+            )
+            all_tools.append(advanced_viz_tool)
+            print("Added advanced visualization tool with support for maps and interactive charts.")
+            
+            # Add natural language visualization tool
+            if 'NATURAL_VIZ_AVAILABLE' in globals() and NATURAL_VIZ_AVAILABLE:
+                natural_viz_func = create_natural_viz_tool(advanced_viz_tool_func)
+                natural_viz_tool = Tool(
+                    name="create_visualization",
+                    func=natural_viz_func,
+                    description=get_natural_viz_tool_description()
+                )
+                all_tools.append(natural_viz_tool)
+                print("Added natural language visualization tool for plain English requests.")
+        except Exception as e:
+            print(f"Could not add advanced visualization tool: {e}")
+    print("Added visualization tool.")
 else:
     print("Visualization tool is not available due to missing dependencies.")
 
@@ -1331,6 +1407,129 @@ if LANGCHAIN_AVAILABLE:
         print(f"Could not create Python REPL tool: {e}")
 else:
     print("Python REPL tool is not available due to missing LangChain dependencies.")
+
+# Add Phase 3 tools if available
+if PHASE3_AVAILABLE and LANGCHAIN_AVAILABLE:
+    try:
+        from langchain.tools import StructuredTool
+        
+        # Initialize Phase 3 components
+        insights_engine = InsightsEngine()
+        report_generator = ReportGenerator()
+        
+        # Automated Insights Discovery Tool
+        def discover_insights_tool(data_query: str, target_columns: str = None, max_insights: int = 10):
+            """Discover automated insights in ecological data"""
+            try:
+                # Execute query to get data
+                if engine is not None:
+                    df = pd.read_sql(data_query, engine)
+                else:
+                    return "Error: Database not available for insights discovery"
+                
+                # Parse target columns if provided
+                target_cols = None
+                if target_columns:
+                    target_cols = [col.strip() for col in target_columns.split(',')]
+                
+                # Discover insights
+                insights = insights_engine.discover_insights(
+                    df, 
+                    target_columns=target_cols,
+                    context={'analysis_type': 'agent_query', 'ecosystem': 'gulf_of_california'}
+                )
+                
+                # Format results for agent
+                if not insights:
+                    return "No significant patterns or insights were automatically detected in the data."
+                
+                results = []
+                for i, insight in enumerate(insights[:max_insights], 1):
+                    insight_text = f"{i}. {insight.get('type', 'Unknown').replace('_', ' ').title()}: {insight.get('description', 'No description')}"
+                    if insight.get('narrative'):
+                        insight_text += f"\n   Analysis: {insight.get('narrative')}"
+                    results.append(insight_text)
+                
+                summary = f"Discovered {len(insights)} insights from {len(df)} records:\n\n" + "\n\n".join(results)
+                return summary
+                
+            except Exception as e:
+                return f"Error discovering insights: {str(e)}"
+        
+        insights_tool = StructuredTool.from_function(
+            func=discover_insights_tool,
+            name="discover_insights",
+            description="""Automatically discover patterns, trends, anomalies, and ecological insights in data.
+            Args:
+            - data_query: SQL query to get the data for analysis
+            - target_columns: Comma-separated list of specific columns to focus on (optional)
+            - max_insights: Maximum number of insights to return (default: 10)
+            Use this when you want to find hidden patterns or get automated analysis of complex datasets."""
+        )
+        all_tools.append(insights_tool)
+        
+        # Comprehensive Report Generation Tool
+        def generate_comprehensive_report_tool(data_query: str, title: str = "Ecological Analysis Report", formats: str = "html"):
+            """Generate comprehensive reports with data analysis and insights"""
+            try:
+                # Execute query to get data
+                if engine is not None:
+                    df = pd.read_sql(data_query, engine)
+                else:
+                    return "Error: Database not available for report generation"
+                
+                # Parse formats
+                format_list = [fmt.strip().lower() for fmt in formats.split(',')]
+                
+                # Generate report
+                config = {
+                    'title': title,
+                    'author': 'Gulf of California LTEM Analysis System',
+                    'formats': format_list,
+                    'output_dir': 'outputs',
+                    'include_insights': True,
+                    'max_insights': 15
+                }
+                
+                results = report_generator.generate_report(df, config)
+                
+                # Format response
+                response_parts = [f"Generated comprehensive report: '{title}'"]
+                response_parts.append(f"Data analyzed: {len(df)} records with {len(df.columns)} variables")
+                
+                if results.get('metadata', {}).get('insights_count', 0) > 0:
+                    insights_count = results['metadata']['insights_count']
+                    response_parts.append(f"Automated insights discovered: {insights_count}")
+                
+                # Add file paths
+                for fmt in format_list:
+                    if fmt in results:
+                        response_parts.append(f"{fmt.upper()} report: {results[fmt]}")
+                
+                return "\n".join(response_parts)
+                
+            except Exception as e:
+                return f"Error generating report: {str(e)}"
+        
+        report_tool = StructuredTool.from_function(
+            func=generate_comprehensive_report_tool,
+            name="generate_comprehensive_report",
+            description="""Generate comprehensive PDF and/or HTML reports with automated insights and professional formatting.
+            Args:
+            - data_query: SQL query to get the data for the report
+            - title: Title for the report (optional)
+            - formats: Comma-separated list of formats: 'pdf', 'html' (default: 'html')
+            Use this to create publication-ready reports with automated insights and professional layouts."""
+        )
+        all_tools.append(report_tool)
+        
+        print("✅ Added Phase 3 automated insights and comprehensive reporting tools.")
+        
+    except Exception as e:
+        print(f"Could not create Phase 3 tools: {e}")
+else:
+    if not PHASE3_AVAILABLE:
+        print("Phase 3 tools not available - automated insights and reporting will be limited.")
 
 # Verify we have all needed components before attempting to create the agent
 required_packages = {
