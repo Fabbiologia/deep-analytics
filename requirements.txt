@@ -1,6 +1,6 @@
 # Core dependencies
 python-dotenv==1.1.1
-streamlit==1.47.1
+gradio==4.31.0
 openai==1.97.1
 
 # Data analysis and visualization
@@ -25,7 +25,8 @@ langgraph==0.0.46
 pydantic==1.10.13
 
 # SQL database connection
-# Note: Uncomment and specify the appropriate database driver based on your needs
+# Note: Ensure the appropriate database driver is installed based on your DATABASE_URL
+SQLAlchemy==2.0.30
 # psycopg2-binary==2.9.9  # For PostgreSQL
-# pymysql==1.1.0         # For MySQL
-# sqlite3                # Built into Python (no need to install)
+pymysql==1.1.0            # For MySQL
+# sqlite3                 # Built into Python (no need to install)

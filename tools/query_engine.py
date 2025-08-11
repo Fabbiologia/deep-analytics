@@ -68,8 +68,7 @@ class QueryEngine:
         if llm_client is None and LANGCHAIN_AVAILABLE:
             try:
                 self.llm_client = ChatOpenAI(
-                    model="gpt-4o-mini",  # Using 4o-mini for cost efficiency
-                    temperature=0
+                    model="gpt-5-mini"
                 )
             except Exception as e:
                 print(f"Error creating LLM client: {e}")

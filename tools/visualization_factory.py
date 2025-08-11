@@ -26,6 +26,13 @@ import seaborn as sns
 import altair as alt
 import folium
 from folium.plugins import MarkerCluster, HeatMap
+import statsmodels.api as sm
+from statsmodels.nonparametric.smoothers_lowess import lowess
+try:
+    from pygam import LinearGAM, s
+    PYGAM_AVAILABLE = True
+except Exception:
+    PYGAM_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -116,16 +123,155 @@ class MatplotlibRenderer(VisualizationRenderer):
         """Create a line chart using matplotlib."""
         logger.info(f"Creating line chart with x={x}, y={y}")
         
-        fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+        # Prepare data: coerce x to datetime or numeric where appropriate and sort chronologically
+        df = data.copy()
+        x_is_datetime = False
+        try:
+            if pd.api.types.is_datetime64_any_dtype(df[x]):
+                x_is_datetime = True
+            elif df[x].dtype == 'object':
+                logger.info(f"Attempting to parse object x-axis '{x}' to datetime")
+                parsed = pd.to_datetime(df[x], errors='coerce', infer_datetime_format=True)
+                if parsed.notna().sum() > 0:
+                    df[x] = parsed
+                    x_is_datetime = True
+            elif 'year' in str(x).lower() and not pd.api.types.is_numeric_dtype(df[x]):
+                logger.info(f"Coercing x-axis '{x}' to numeric (year detected)")
+                df[x] = pd.to_numeric(df[x], errors='coerce')
+        except Exception as e:
+            logger.warning(f"Could not infer/convert x-axis dtype for '{x}': {e}")
         
-        # Handle single y or multiple y columns
-        if isinstance(y, list):
-            for col in y:
-                ax.plot(data[x], data[col], label=col)
-            ax.legend()
+        # Drop rows with missing x and sort by x ascending
+        before_rows = len(df)
+        df = df.dropna(subset=[x])
+        after_rows = len(df)
+        if after_rows < before_rows:
+            logger.info(f"Dropped {before_rows - after_rows} rows with missing x values for '{x}'")
+        df = df.sort_values(by=x, ascending=True, kind='mergesort')
+        logger.info(f"Data sorted by '{x}' ascending for line plot")
+
+        fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+
+        # Options
+        group_col = kwargs.get('color') or kwargs.get('group') or kwargs.get('hue')
+        show_points = bool(kwargs.get('show_points', False))
+        show_line = bool(kwargs.get('show_line', True))
+        error_lower = kwargs.get('error_lower')  # column with lower bound
+        error_upper = kwargs.get('error_upper')  # column with upper bound
+        compute_error = bool(kwargs.get('compute_error', False))
+        error_type = str(kwargs.get('error_type', 'se')).lower()  # 'se' or 'ci'
+        ci_level = float(kwargs.get('ci_level', 0.95))
+        ci_mult = 1.96 if abs(ci_level - 0.95) < 1e-6 else 1.96  # simple default
+        smoother = kwargs.get('smoother', None)  # None|'glm'|'loess'|'gam'
+        smoother_params = kwargs.get('smoother_params', {}) or {}
+
+        def _ensure_numeric_x(series: pd.Series) -> np.ndarray:
+            if pd.api.types.is_datetime64_any_dtype(series):
+                return series.view('int64').to_numpy()
+            return pd.to_numeric(series, errors='coerce').to_numpy()
+
+        def _plot_group(gdf: pd.DataFrame, label: str, color=None):
+            nonlocal y
+            # If multiple y columns, fall back to simple plotting per column
+            if isinstance(y, list):
+                for i, col in enumerate(y):
+                    ax.plot(gdf[x], gdf[col], label=col)
+                return
+
+            plot_y_col = y
+            plot_df = gdf.copy()
+            # Compute error if requested
+            if compute_error:
+                agg = (
+                    plot_df.groupby([x], as_index=False)[y]
+                    .agg(mean='mean', std='std', count='count')
+                )
+                agg['se'] = agg['std'] / np.sqrt(agg['count'].replace(0, np.nan))
+                if error_type == 'ci':
+                    agg['lower'] = agg['mean'] - ci_mult * agg['se']
+                    agg['upper'] = agg['mean'] + ci_mult * agg['se']
+                else:
+                    agg['lower'] = agg['mean'] - agg['se']
+                    agg['upper'] = agg['mean'] + agg['se']
+                plot_df = agg.rename(columns={'mean': y})
+                plot_y_col = y
+                lower_series = plot_df['lower']
+                upper_series = plot_df['upper']
+            elif error_lower in plot_df.columns and error_upper in plot_df.columns:
+                lower_series = plot_df[error_lower]
+                upper_series = plot_df[error_upper]
+            else:
+                lower_series = upper_series = None
+
+            # Base geometry
+            if show_line:
+                ax.plot(plot_df[x], plot_df[plot_y_col], label=label, color=color)
+            if show_points:
+                ax.scatter(plot_df[x], plot_df[plot_y_col], label=None if show_line else label, color=color, zorder=3)
+
+            # Error bars around points
+            if lower_series is not None and upper_series is not None:
+                yerr_minus = (plot_df[plot_y_col] - lower_series).to_numpy()
+                yerr_plus = (upper_series - plot_df[plot_y_col]).to_numpy()
+                ax.errorbar(
+                    plot_df[x], plot_df[plot_y_col],
+                    yerr=[yerr_minus, yerr_plus], fmt='none', ecolor=color, alpha=0.6, capsize=3
+                )
+
+            # Optional smoother overlay
+            if smoother in ['glm', 'loess', 'gam']:
+                x_num = _ensure_numeric_x(plot_df[x])
+                valid = ~np.isnan(x_num) & plot_df[plot_y_col].notna().to_numpy()
+                x_num = x_num[valid]
+                y_num = plot_df[plot_y_col].to_numpy()[valid]
+                if len(x_num) > 2:
+                    order = np.argsort(x_num)
+                    x_sorted = x_num[order]
+                    y_sorted = y_num[order]
+                    if smoother == 'glm':
+                        try:
+                            X = sm.add_constant(x_sorted)
+                            model = sm.GLM(y_sorted, X, family=sm.families.Gaussian())
+                            fit = model.fit()
+                            X_pred = sm.add_constant(x_sorted)
+                            y_pred = fit.predict(X_pred)
+                            x_plot = plot_df[x].iloc[valid].to_numpy()[order]
+                            ax.plot(x_plot, y_pred, linestyle='--', color=color, label=None)
+                        except Exception as e:
+                            logger.warning(f"GLM smoothing failed: {e}")
+                    elif smoother == 'loess':
+                        try:
+                            frac = float(smoother_params.get('frac', 0.5))
+                            smoothed = lowess(y_sorted, x_sorted, frac=frac, return_sorted=True)
+                            x_plot_numeric, y_pred = smoothed[:, 0], smoothed[:, 1]
+                            if x_is_datetime:
+                                x_plot = pd.to_datetime(x_plot_numeric, unit='ns')
+                            else:
+                                x_plot = x_sorted
+                            ax.plot(x_plot, y_pred, linestyle='--', color=color, label=None)
+                        except Exception as e:
+                            logger.warning(f"LOESS smoothing failed: {e}")
+                    elif smoother == 'gam':
+                        if PYGAM_AVAILABLE:
+                            try:
+                                X = x_sorted.reshape(-1, 1)
+                                gam = LinearGAM(s(0)).fit(X, y_sorted)
+                                y_pred = gam.predict(X)
+                                x_plot = plot_df[x].iloc[valid].to_numpy()[order]
+                                ax.plot(x_plot, y_pred, linestyle='--', color=color, label=None)
+                            except Exception as e:
+                                logger.warning(f"GAM smoothing failed: {e}")
+                        else:
+                            logger.info("GAM smoothing requested but pygam is not installed; skipping.")
+
+        if group_col and group_col in df.columns:
+            for idx, (grp, gdf) in enumerate(df.groupby(group_col, sort=False)):
+                color = self.colorblind_palette[idx % len(self.colorblind_palette)]
+                _plot_group(gdf, label=str(grp), color=color)
+            ax.legend(title=group_col)
         else:
-            ax.plot(data[x], data[y])
-            
+            _plot_group(df, label=str(y) if isinstance(y, str) else 'series', color=self.colorblind_palette[0])
+
         # Apply labels and title
         ax.set_xlabel(kwargs.get('xlabel', x))
         ax.set_ylabel(kwargs.get('ylabel', y if isinstance(y, str) else "Value"))
@@ -316,14 +462,151 @@ class PlotlyRenderer(VisualizationRenderer):
         """Create a line chart using plotly."""
         logger.info(f"Creating line chart with x={x}, y={y}")
         
-        # Handle single y or multiple y columns
-        if isinstance(y, list):
-            fig = go.Figure()
-            for col in y:
-                fig.add_trace(go.Scatter(x=data[x], y=data[col], mode='lines', name=col))
+        # Prepare data: coerce x to datetime or numeric where appropriate and sort chronologically
+        df = data.copy()
+        x_is_datetime = False
+        try:
+            if pd.api.types.is_datetime64_any_dtype(df[x]):
+                x_is_datetime = True
+            elif df[x].dtype == 'object':
+                logger.info(f"Attempting to parse object x-axis '{x}' to datetime")
+                parsed = pd.to_datetime(df[x], errors='coerce', infer_datetime_format=True)
+                if parsed.notna().sum() > 0:
+                    df[x] = parsed
+                    x_is_datetime = True
+            elif 'year' in str(x).lower() and not pd.api.types.is_numeric_dtype(df[x]):
+                logger.info(f"Coercing x-axis '{x}' to numeric (year detected)")
+                df[x] = pd.to_numeric(df[x], errors='coerce')
+        except Exception as e:
+            logger.warning(f"Could not infer/convert x-axis dtype for '{x}': {e}")
+        
+        # Drop rows with missing x and y, then sort by x ascending
+        cols_to_check = [x] + (y if isinstance(y, list) else [y])
+        cols_to_check = [c for c in cols_to_check if c in df.columns]
+        before_rows = len(df)
+        df = df.dropna(subset=cols_to_check)
+        after_rows = len(df)
+        if after_rows < before_rows:
+            logger.info(f"Dropped {before_rows - after_rows} rows with missing values in {cols_to_check}")
+        df = df.sort_values(by=x, ascending=True, kind='mergesort')
+        logger.info(f"Data sorted by '{x}' ascending for line plot")
+
+        group_col = kwargs.get('color') or kwargs.get('group') or kwargs.get('hue')
+        show_points = bool(kwargs.get('show_points', False))
+        show_line = bool(kwargs.get('show_line', True))
+        error_lower = kwargs.get('error_lower')
+        error_upper = kwargs.get('error_upper')
+        compute_error = bool(kwargs.get('compute_error', False))
+        error_type = str(kwargs.get('error_type', 'se')).lower()
+        ci_level = float(kwargs.get('ci_level', 0.95))
+        ci_mult = 1.96 if abs(ci_level - 0.95) < 1e-6 else 1.96
+        smoother = kwargs.get('smoother', None)  # None|'glm'|'loess'|'gam'
+        smoother_params = kwargs.get('smoother_params', {}) or {}
+
+        def _ensure_numeric_x(series: pd.Series) -> np.ndarray:
+            if pd.api.types.is_datetime64_any_dtype(series):
+                return series.view('int64').to_numpy()
+            return pd.to_numeric(series, errors='coerce').to_numpy()
+
+        fig = go.Figure()
+
+        def _add_trace(gdf: pd.DataFrame, name: str):
+            nonlocal y
+            if isinstance(y, list):
+                # Multiple y columns: add one trace per column
+                for col in y:
+                    fig.add_trace(go.Scatter(
+                        x=gdf[x], y=gdf[col], mode='lines', name=f"{name} - {col}"
+                    ))
+                return
+
+            plot_y_col = y
+            plot_df = gdf.copy()
+            lower_series = upper_series = None
+            if compute_error:
+                agg = (
+                    plot_df.groupby([x], as_index=False)[y]
+                    .agg(mean='mean', std='std', count='count')
+                )
+                agg['se'] = agg['std'] / np.sqrt(agg['count'].replace(0, np.nan))
+                if error_type == 'ci':
+                    agg['lower'] = agg['mean'] - ci_mult * agg['se']
+                    agg['upper'] = agg['mean'] + ci_mult * agg['se']
+                else:
+                    agg['lower'] = agg['mean'] - agg['se']
+                    agg['upper'] = agg['mean'] + agg['se']
+                plot_df = agg.rename(columns={'mean': y})
+                plot_y_col = y
+                lower_series = plot_df['lower']
+                upper_series = plot_df['upper']
+            elif error_lower in plot_df.columns and error_upper in plot_df.columns:
+                lower_series = plot_df[error_lower]
+                upper_series = plot_df[error_upper]
+
+            mode = 'lines+markers' if (show_line and show_points) else ('lines' if show_line else 'markers')
+            err = None
+            if lower_series is not None and upper_series is not None:
+                err = dict(type='data', symmetric=False,
+                           array=(upper_series - plot_df[plot_y_col]).to_numpy(),
+                           arrayminus=(plot_df[plot_y_col] - lower_series).to_numpy())
+            fig.add_trace(go.Scatter(x=plot_df[x], y=plot_df[plot_y_col], mode=mode, name=name,
+                                     error_y=err))
+
+            # Optional smoother overlay
+            if smoother in ['glm', 'loess', 'gam']:
+                x_num = _ensure_numeric_x(plot_df[x])
+                valid = ~np.isnan(x_num) & plot_df[plot_y_col].notna().to_numpy()
+                x_num = x_num[valid]
+                y_num = plot_df[plot_y_col].to_numpy()[valid]
+                if len(x_num) > 2:
+                    order = np.argsort(x_num)
+                    x_sorted = x_num[order]
+                    y_sorted = y_num[order]
+                    if smoother == 'glm':
+                        try:
+                            X = sm.add_constant(x_sorted)
+                            model = sm.GLM(y_sorted, X, family=sm.families.Gaussian())
+                            fit = model.fit()
+                            X_pred = sm.add_constant(x_sorted)
+                            y_pred = fit.predict(X_pred)
+                            x_plot = plot_df[x].iloc[valid].to_numpy()[order]
+                            fig.add_trace(go.Scatter(x=x_plot, y=y_pred, mode='lines', name=f"{name} GLM",
+                                                     line=dict(dash='dash')))
+                        except Exception as e:
+                            logger.warning(f"GLM smoothing failed: {e}")
+                    elif smoother == 'loess':
+                        try:
+                            frac = float(smoother_params.get('frac', 0.5))
+                            smoothed = lowess(y_sorted, x_sorted, frac=frac, return_sorted=True)
+                            x_plot_numeric, y_pred = smoothed[:, 0], smoothed[:, 1]
+                            if x_is_datetime:
+                                x_plot = pd.to_datetime(x_plot_numeric, unit='ns')
+                            else:
+                                x_plot = x_sorted
+                            fig.add_trace(go.Scatter(x=x_plot, y=y_pred, mode='lines', name=f"{name} LOESS",
+                                                     line=dict(dash='dash')))
+                        except Exception as e:
+                            logger.warning(f"LOESS smoothing failed: {e}")
+                    elif smoother == 'gam':
+                        if PYGAM_AVAILABLE:
+                            try:
+                                X = x_sorted.reshape(-1, 1)
+                                gam = LinearGAM(s(0)).fit(X, y_sorted)
+                                y_pred = gam.predict(X)
+                                x_plot = plot_df[x].iloc[valid].to_numpy()[order]
+                                fig.add_trace(go.Scatter(x=x_plot, y=y_pred, mode='lines', name=f"{name} GAM",
+                                                         line=dict(dash='dash')))
+                            except Exception as e:
+                                logger.warning(f"GAM smoothing failed: {e}")
+                        else:
+                            logger.info("GAM smoothing requested but pygam is not installed; skipping.")
+
+        if group_col and group_col in df.columns:
+            for grp, gdf in df.groupby(group_col, sort=False):
+                _add_trace(gdf, name=str(grp))
         else:
-            fig = px.line(data, x=x, y=y)
-            
+            _add_trace(df, name=(y if isinstance(y, str) else 'series'))
+
         # Apply labels and title
         fig.update_layout(
             title=title,
@@ -331,6 +614,9 @@ class PlotlyRenderer(VisualizationRenderer):
             yaxis_title=kwargs.get('ylabel', y if isinstance(y, str) else "Value"),
             template=self.template
         )
+        # Set x-axis type for datetime
+        if x_is_datetime:
+            fig.update_xaxes(type='date')
         
         return fig
     

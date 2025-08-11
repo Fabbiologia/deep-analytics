@@ -76,8 +76,7 @@ class ContextAwareAssistant:
         if llm_client is None and LANGCHAIN_AVAILABLE:
             try:
                 self.llm_client = ChatOpenAI(
-                    model="gpt-4o-mini",  # Using 4o-mini for cost efficiency
-                    temperature=0.2  # Slight creativity for analysis suggestions
+                    model="gpt-5-mini"
                 )
             except Exception as e:
                 print(f"Error creating LLM client: {e}")

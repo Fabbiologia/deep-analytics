@@ -115,6 +115,13 @@ except ImportError as e:
         def __init__(self, **kwargs):
             pass
 
+# Optional UI dependency for in-app visualization controls
+try:
+    import gradio as gr
+    GRADIO_AVAILABLE = True
+except ImportError:
+    GRADIO_AVAILABLE = False
+
 # Environment variables should be loaded above in the try-except block
 
 # --- Database schema description ---
@@ -264,7 +271,7 @@ prompt = None
 
 if LANGCHAIN_AVAILABLE:
     try:
-        llm = ChatOpenAI(model="gpt-4o", temperature=0)
+        llm = ChatOpenAI(model="gpt-5-mini")
         
         # --- Create a prompt template that includes our system prompt ---
         prompt = ChatPromptTemplate.from_messages([
@@ -1082,7 +1089,6 @@ class ProgressCallback:
             self._stop_progress_thread(llm_id)
             log_progress("AI model processing completed", elapsed_time, 1.0)
             del self.start_times[llm_id]
-    
             
     def _start_progress_thread(self, tool_id, message, tool_type=None):
         """Start a thread to periodically output progress messages for long-running operations."""
@@ -1408,6 +1414,130 @@ if LANGCHAIN_AVAILABLE:
 else:
     print("Python REPL tool is not available due to missing LangChain dependencies.")
 
+# --- Visualization Controls UI (Gradio Blocks) ---
+# Provides toggles and parameters for advanced line charts (grouping, points, lines, error bars, smoothing)
+# Uses the already initialized `advanced_viz_tool_func` and database `engine`.
+def launch_visualization_controls():
+    """
+    Launch a Gradio Blocks UI exposing advanced visualization controls.
+    - Consolidates grouped lines, error bars, points, smoothing (GLM/LOESS/GAM) into one UI.
+    - Calls the integrated advanced visualization tool in this module.
+    Returns the Gradio Blocks app if Gradio is available; otherwise returns a string message.
+    """
+    if not ('GRADIO_AVAILABLE' in globals() and GRADIO_AVAILABLE):
+        return "Gradio is not installed. Please `pip install gradio` to use the visualization UI."
+    if 'advanced_viz_tool_func' not in globals() or advanced_viz_tool_func is None:
+        return "Advanced visualization tool is not available. Ensure visualization components initialized."
+    if 'engine' not in globals() or engine is None:
+        return "Database engine is not available. Set DATABASE_URL or ensure DB initialization succeeded."
+
+    import json
+
+    def _submit(
+        sql_query: str,
+        viz_type: str,
+        renderer: str,
+        x: str,
+        y: str,
+        group: str,
+        show_points: bool,
+        show_line: bool,
+        compute_error: bool,
+        error_type: str,
+        error_lower: str,
+        error_upper: str,
+        smoother: str,
+        loess_frac: float,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        filename: str
+    ):
+        # Handle y as list if comma-separated
+        y_clean = (y or "").strip()
+        if "," in y_clean:
+            y_value = [part.strip() for part in y_clean.split(",") if part.strip()]
+        else:
+            y_value = y_clean or None
+
+        # Normalize smoother
+        smoother_norm = (smoother or "").strip().lower()
+        smoother_value = None if smoother_norm == "none" else (smoother_norm or None)
+
+        params = {
+            "renderer": renderer or None,
+            "x": (x or "").strip() or None,
+            "y": y_value,
+            "group": (group or "").strip() or None,
+            "color": (group or "").strip() or None,
+            "show_points": bool(show_points),
+            "show_line": bool(show_line),
+            "compute_error": bool(compute_error),
+            "error_type": (error_type or "se").lower(),
+            "error_lower": (error_lower or "").strip() or None,
+            "error_upper": (error_upper or "").strip() or None,
+            "smoother": smoother_value,
+            "smoother_params": {"frac": float(loess_frac) if loess_frac else 0.5},
+            "title": (title or "").strip() or None,
+            "xlabel": (xlabel or "").strip() or None,
+            "ylabel": (ylabel or "").strip() or None,
+            "filename": (filename or "").strip() or None,
+        }
+        params = {k: v for k, v in params.items() if v is not None}
+
+        payload = {
+            "query": sql_query,
+            "viz_type": (viz_type or "line").lower(),
+            "params": params,
+        }
+        return advanced_viz_tool_func(json.dumps(payload))
+
+    with gr.Blocks(title="Advanced Visualization Controls") as demo:
+        gr.Markdown("## Advanced Visualization Controls\nConfigure grouped lines, error bars, points, and smoothing. Uses VisualizationFactory under the hood.")
+
+        with gr.Row():
+            sql_query = gr.Textbox(label="SQL Query", lines=5, placeholder="SELECT Year, AVG(Biomass) AS AvgBiomass, Region FROM ltem_optimized_regions WHERE Label='PEC' GROUP BY Year, Region")
+
+        with gr.Row():
+            viz_type = gr.Dropdown(choices=["line", "bar", "scatter", "histogram", "heatmap", "box_plot", "map", "bubble_map", "map_heatmap"], value="line", label="Visualization Type")
+            renderer = gr.Dropdown(choices=["plotly", "matplotlib", "altair", "folium"], value="plotly", label="Renderer")
+
+        with gr.Row():
+            x = gr.Textbox(label="X Column", placeholder="Year")
+            y = gr.Textbox(label="Y Column or comma-separated list", placeholder="AvgBiomass")
+            group = gr.Textbox(label="Group/Color Column (optional)", placeholder="Region")
+
+        with gr.Row():
+            show_points = gr.Checkbox(label="Show Points", value=True)
+            show_line = gr.Checkbox(label="Show Line", value=True)
+            compute_error = gr.Checkbox(label="Compute Error (SE/CI)", value=False)
+            error_type = gr.Dropdown(choices=["se", "ci"], value="se", label="Error Type")
+
+        with gr.Row():
+            error_lower = gr.Textbox(label="Error Lower Col (optional)")
+            error_upper = gr.Textbox(label="Error Upper Col (optional)")
+
+        with gr.Row():
+            smoother = gr.Dropdown(choices=["none", "glm", "loess", "gam"], value="none", label="Smoother")
+            loess_frac = gr.Slider(minimum=0.1, maximum=0.9, value=0.5, step=0.05, label="LOESS frac")
+
+        with gr.Row():
+            title = gr.Textbox(label="Title", placeholder="Fish Biomass Density by Year")
+            xlabel = gr.Textbox(label="X Label", placeholder="Year")
+            ylabel = gr.Textbox(label="Y Label", placeholder="Biomass")
+            filename = gr.Textbox(label="Filename (no extension)", placeholder="biomass_trend")
+
+        out = gr.Textbox(label="Result", lines=3)
+
+        submit = gr.Button("Create Visualization")
+        submit.click(
+            _submit,
+            inputs=[sql_query, viz_type, renderer, x, y, group, show_points, show_line, compute_error, error_type, error_lower, error_upper, smoother, loess_frac, title, xlabel, ylabel, filename],
+            outputs=[out]
+        )
+
+    return demo
+
 # Add Phase 3 tools if available
 if PHASE3_AVAILABLE and LANGCHAIN_AVAILABLE:
     try:
@@ -1578,91 +1708,73 @@ if LANGCHAIN_AVAILABLE and (DATABASE_AVAILABLE or pd is not None):
 else:
     print("\n❌ Cannot create agent due to missing core dependencies.")
 
-# --- Chat History and Interactive Loop ---
-print("\n--- Ecological Monitoring Agent ---")
+# --- Agent Analysis Function ---
+def run_analysis(user_question: str) -> str:
+    """
+    Runs the full analysis pipeline for a given user question.
+    This function is designed to be called from a GUI.
+    """
+    if not agent_available or not agent_executor:
+        return "Error: Agent is not available due to missing dependencies or initialization failure."
 
-# Exit if agent is not available
-if not agent_available:
-    print("\nWARNING: Agent is not available due to missing dependencies.")
-    print("\nRequired packages:")
-    print("  - langchain-openai, langchain-community, langchain-core, langchain-experimental")
-    print("  - sqlalchemy, pandas")
-    print("  - matplotlib, seaborn (for visualization)")
-    print("\nInstallation command:")
-    print("  pip install langchain-openai langchain-community langchain-core langchain-experimental sqlalchemy pandas matplotlib seaborn")
-    sys.exit(1)
+    # The spinner is a command-line feature, so we'll just log progress for the GUI.
+    print(f"Starting analysis for: {user_question}")
+    start_time = time.time()
 
-print("\nAgent is ready! Ask me questions about your database.")
-print("Type 'exit', 'quit', or 'q' to end the session.")
-
-# Chat history disabled to prevent memory retention between questions
-# chat_history = []
-
-# Main interaction loop
-while True:
-    user_question = input("\nYour Question: ")
-    if user_question.lower() in ['exit', 'quit', 'q']:
-        print("\nThank you for using the Ecological Monitoring Agent. Goodbye!")
-        break
-    
-    spinner = Spinner("🐠 Analyzing data...")  # Create a spinner instance
     try:
-        spinner.start()  # Start the animation
-        
-        # Add initial progress message with timestamp and progress bar
-        start_time = time.time()
-        log_progress("Starting analysis...")
-        
         # Execute the agent with the user's question
         response = agent_executor.invoke({
             "input": user_question
-            # "chat_history" removed to prevent memory retention between questions
         })
-        
-        # Sanitize the response to check for hallucinated regions/locations
+
+        # Sanitize the response
         sanitized_output = response["output"]
         if data_validator is not None:
-            log_progress("Validating regions and locations in response...")
+            print("Validating response...")
             sanitized_output = data_validator.sanitize_response(response["output"])
         
-        spinner.stop()  # Stop the animation
-        
-        # Calculate total elapsed time
         total_elapsed = time.time() - start_time
+        print(f"Analysis complete in {total_elapsed:.2f} seconds.")
         
-        # Add completion message with total time and 100% progress
-        log_progress("Analysis complete", total_elapsed, 1.0)
-        
-        # Chat history updates removed to prevent memory retention between questions
-        # chat_history.append(HumanMessage(content=user_question))
-        # chat_history.append(AIMessage(content=sanitized_output))
-        
-        # Display the result
-        print("\nAgent's Answer:")
-        print(sanitized_output)
-        
+        return sanitized_output
+
     except Exception as e:
-        # Handle errors gracefully
-        spinner.stop()  # Ensure spinner stops on error
-        print(f"\nAn error occurred: {e}")
-        
-        # Display additional diagnostic information
-        current_time = time.time()
-        log_progress("Error details", current_time - start_time)
-        
-        # Helpful troubleshooting suggestions
+        error_message = f"An error occurred: {e}"
+        print(error_message)
+        # Provide specific advice for common errors
         if "rate limit" in str(e).lower():
-            print("This appears to be a rate limit error from OpenAI.")
-            print("The agent is using gpt-4o-mini to avoid rate limiting where possible.")
-            print("You may need to wait a few minutes before trying again.")
-        else:
-            print("If errors persist, check that all required dependencies are installed")
-            print("and that your database connection information is correct.")
-            
-        # Ask if they want to continue
-        print("\nDo you want to continue with another question? (yes/no)")
-        continue_response = input().lower()
-        if continue_response not in ["y", "yes"]:
-            print("\nExiting due to error. Goodbye!")
+            return (f"{error_message}\n\nThis appears to be a rate limit error from OpenAI. "
+                    "Please wait a few minutes before trying again.")
+        return error_message
+
+# --- Main Interactive Loop (for command-line use) ---
+if __name__ == "__main__":
+    print("\n--- Ecological Monitoring Agent (Command-Line Interface) ---")
+
+    # Exit if agent is not available
+    if not agent_available:
+        print("\nWARNING: Agent is not available due to missing dependencies.")
+        print("Please check your installation and environment variables.")
+        sys.exit(1)
+
+    print("\nAgent is ready! Ask me questions about your database.")
+    print("Type 'exit', 'quit', or 'q' to end the session.")
+
+    # Main interaction loop
+    while True:
+        user_question = input("\nYour Question: ")
+        if user_question.lower() in ['exit', 'quit', 'q']:
+            print("\nThank you for using the Ecological Monitoring Agent. Goodbye!")
             break
+        
+        # Use the new run_analysis function
+        spinner = Spinner("🐠 Analyzing data...")
+        spinner.start()
+        
+        answer = run_analysis(user_question)
+        
+        spinner.stop()
+        
+        print("\nAgent's Answer:")
+        print(answer)
 

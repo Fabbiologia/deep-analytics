@@ -228,12 +228,12 @@ All visualizations accept:
 
 Example: 
 {
-  "query": "SELECT Year, AVG(Biomass/Area) as AvgDensity FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
+  "query": "SELECT Year, AVG(Biomass) as AvgBiomass FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
   "viz_type": "line",
   "params": {
-    "title": "Fish Biomass Density in Cabo Pulmo",
+    "title": "Fish Biomass in Cabo Pulmo",
     "x": "Year",
-    "y": "AvgDensity",
+    "y": "AvgBiomass",
     "filename": "cabo_pulmo_biomass_trend",
     "renderer": "plotly"
   }

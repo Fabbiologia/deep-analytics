@@ -282,12 +282,14 @@ def build_sql_query(viz_type: str, params: Dict[str, Any]) -> str:
         # Use the correct aggregation method: SUM per transect, then AVG across groups
         # For a more accurate ecological biomass calculation
         if y_col.lower() in ['biomass', 'quantity', 'count', 'abundance']:
-            select_clause += f"{x_col}, AVG(SUM({y_col})/SUM(Area)) as Biomass"
-            logger.info(f"Using ecological aggregation for {y_col} - sum per transect, then average")
+            # Handled below with a subquery that averages per-transect biomass (already area-standardized)
+            # Placeholder; actual query will be returned in advanced ecological block
+            select_clause += f"{x_col}, AVG({y_col}) as Biomass"
+            logger.info(f"Using ecological aggregation for {y_col} - average per transect without dividing by area")
         else:
-            select_clause += f"{x_col}, AVG({y_col}/Area) as AvgDensity"
-            logger.info(f"Using standard density calculation for {y_col}")
-            
+            select_clause += f"{x_col}, AVG({y_col}) as AvgValue"
+            logger.info(f"Using standard aggregation for {y_col} (no area division)")
+        
         group_by_clause = f" GROUP BY {x_col}"
         
     elif viz_type == 'bar':
@@ -309,7 +311,7 @@ def build_sql_query(viz_type: str, params: Dict[str, Any]) -> str:
         x_col = params.get('x', 'Size')
         y_col = params.get('y', 'Biomass')
         
-        select_clause += f"{x_col}, {y_col}/Area as Density"
+        select_clause += f"{x_col}, {y_col} as Value"
         
     elif viz_type == 'heatmap':
         select_clause += "Taxa1, Taxa2, COUNT(*) as Count"
@@ -320,10 +322,10 @@ def build_sql_query(viz_type: str, params: Dict[str, Any]) -> str:
             select_clause += "AVG(Longitude) as Longitude, AVG(Latitude) as Latitude, Reef, COUNT(*) as SampleCount"
             group_by_clause = " GROUP BY Reef"
         elif viz_type == 'bubble_map':
-            select_clause += "AVG(Longitude) as Longitude, AVG(Latitude) as Latitude, Reef, AVG(Biomass/Area) as AvgBiomass"
+            select_clause += "AVG(Longitude) as Longitude, AVG(Latitude) as Latitude, Reef, AVG(Biomass) as AvgBiomass"
             group_by_clause = " GROUP BY Reef"
         elif viz_type == 'map_heatmap':
-            select_clause += "Longitude, Latitude, Biomass/Area as BiomassPerArea"
+            select_clause += "Longitude, Latitude, Biomass as BiomassValue"
     
     # Add where clause if filters are specified
     where_clause = ""
@@ -340,15 +342,20 @@ def build_sql_query(viz_type: str, params: Dict[str, Any]) -> str:
         x_col = params.get('x', '')
         if x_col:
             # Use a subquery approach to get proper ecological aggregation
-            base_query = f"""WITH TransectSums AS (
-                SELECT {x_col}, TransectID, SUM({y_col}) as TotalBiomass, SUM(Area) as TotalArea 
+            base_query = f"""WITH TransectAgg AS (
+                SELECT {x_col},
+                       CONCAT(COALESCE(IDReef, ''), '_', COALESCE(Transect, '')) AS TransectUID,
+                       AVG({y_col}) AS TransectBiomass
                 FROM ltem_optimized_regions
                 {where_clause}
-                GROUP BY {x_col}, TransectID
+                GROUP BY {x_col}, CONCAT(COALESCE(IDReef, ''), '_', COALESCE(Transect, ''))
             )
-            SELECT {x_col}, AVG(TotalBiomass/TotalArea) as Biomass
-            FROM TransectSums
+            SELECT {x_col},
+                   AVG(TransectBiomass) AS Biomass,
+                   COUNT(*) AS n_transects
+            FROM TransectAgg
             GROUP BY {x_col}
+            ORDER BY {x_col}
             """
             return base_query
     
@@ -453,11 +460,11 @@ def parse_visualization_request(query: str) -> Dict[str, Any]:
         
         # Return a simple default
         return {
-            "query": "SELECT Year, AVG(Biomass/Area) as AvgDensity FROM ltem_optimized_regions GROUP BY Year",
+            "query": "SELECT Year, AVG(Biomass) as AvgBiomass FROM ltem_optimized_regions GROUP BY Year",
             "viz_type": "line",
             "params": {
                 "x": "Year",
-                "y": "AvgDensity",
+                "y": "AvgBiomass",
                 "title": "Default Visualization",
                 "filename": "default_viz"
             }

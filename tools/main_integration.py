@@ -145,8 +145,8 @@ def setup_phase1_components():
             else:
                 print("DATABASE_URL environment variable not set.")
                 
-        # Create LLM client
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # Create LLM client (gpt-5-mini requires default temperature only)
+        llm = ChatOpenAI(model="gpt-5-mini")
         
         # Create shared memory manager
         memory = ConversationBufferMemory(

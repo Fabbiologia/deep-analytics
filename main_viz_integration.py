@@ -71,12 +71,12 @@ if ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func and DATABASE_AVAILABLE:
 
 # 1. Basic chart with Matplotlib
 {
-    "query": "SELECT Year, AVG(Biomass/Area) as AvgDensity FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
+    "query": "SELECT Year, AVG(Biomass) as AvgBiomass FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
     "viz_type": "line",
     "params": {
-        "title": "Fish Biomass Density in Cabo Pulmo",
+        "title": "Fish Biomass in Cabo Pulmo",
         "x": "Year",
-        "y": "AvgDensity",
+        "y": "AvgBiomass",
         "filename": "cabo_pulmo_biomass_trend",
         "renderer": "matplotlib"
     }
@@ -84,12 +84,12 @@ if ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func and DATABASE_AVAILABLE:
 
 # 2. Interactive chart with Plotly
 {
-    "query": "SELECT Year, AVG(Biomass/Area) as AvgDensity FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
+    "query": "SELECT Year, AVG(Biomass) as AvgBiomass FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Year",
     "viz_type": "line",
     "params": {
-        "title": "Fish Biomass Density in Cabo Pulmo",
+        "title": "Fish Biomass in Cabo Pulmo",
         "x": "Year",
-        "y": "AvgDensity",
+        "y": "AvgBiomass",
         "filename": "cabo_pulmo_biomass_interactive",
         "renderer": "plotly"
     }
@@ -110,7 +110,7 @@ if ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func and DATABASE_AVAILABLE:
 
 # 4. Bubble map with Folium
 {
-    "query": "SELECT AVG(Longitude) as Longitude, AVG(Latitude) as Latitude, Reef, AVG(Biomass/Area) as AvgBiomass FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Reef",
+    "query": "SELECT AVG(Longitude) as Longitude, AVG(Latitude) as Latitude, Reef, AVG(Biomass) as AvgBiomass FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC' GROUP BY Reef",
     "viz_type": "bubble_map",
     "params": {
         "title": "Fish Biomass by Location in Cabo Pulmo",
@@ -124,13 +124,13 @@ if ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func and DATABASE_AVAILABLE:
 
 # 5. Heatmap with Folium
 {
-    "query": "SELECT Longitude, Latitude, Biomass/Area as BiomassPerArea FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC'",
+    "query": "SELECT Longitude, Latitude, Biomass as BiomassValue FROM ltem_optimized_regions WHERE Region='Cabo Pulmo' AND Label='PEC'",
     "viz_type": "map_heatmap",
     "params": {
         "title": "Fish Biomass Heatmap in Cabo Pulmo",
         "lat": "Latitude", 
         "lon": "Longitude",
-        "weight": "BiomassPerArea",
+        "weight": "BiomassValue",
         "filename": "cabo_pulmo_biomass_heatmap"
     }
 }
