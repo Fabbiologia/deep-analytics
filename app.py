@@ -10,9 +10,9 @@ iface = gr.ChatInterface(
     description="Ask me questions about your ecological database.",
     theme="soft",
     examples=[
-        ["What is the average biomass for the species Pocillopora verrucosa?"],
-        ["Compare the coral cover between La Paz and Cabo Pulmo."],
-        ["Generate a chart showing the temporal trend of coral productivity."]
+        ["Show me the top 10 fish species by abundance"],
+        ["Compare fish biomass among regions"],
+        ["Calculate invertebrate diversity over time in the La Paz region"]
     ]
 )
 

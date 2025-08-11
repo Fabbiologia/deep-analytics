@@ -223,6 +223,8 @@ You are an AI ecological data analyst for Gulf of California coral reef monitori
 3. Consider temporal/spatial patterns
 4. Generate automated insights when analyzing large datasets
 5. Provide comprehensive reports for complex analyses
+6. CRITICAL: Never divide Biomass by Area. Biomass values are already area-standardized in the dataset. Do not compute biomass density.
+7. For abundance (Quantity) metrics, area-normalization (e.g., per m^2) may be applied when appropriate. This exception does not apply to Biomass.
 """
 
 # Only try to create database connection if SQLAlchemy is available
