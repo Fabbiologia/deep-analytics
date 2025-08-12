@@ -299,11 +299,11 @@ def build_sql_query(viz_type: str, params: Dict[str, Any]) -> str:
         # Use the correct aggregation method: SUM per transect, then AVG across groups
         # For a more accurate ecological biomass calculation
         if y_col.lower() in ['biomass', 'quantity', 'count', 'abundance']:
-            select_clause += f"{x_col}, AVG(SUM({y_col})/SUM(Area)) as Biomass"
-            logger.info(f"Using ecological aggregation for {y_col} - sum per transect, then average")
+            select_clause += f"{x_col}, AVG({y_col}) as Biomass"
+            logger.info(f"Using ecological aggregation for {y_col} - average without dividing by area (already standardized)")
         else:
-            select_clause += f"{x_col}, AVG({y_col}/Area) as AvgDensity"
-            logger.info(f"Using standard density calculation for {y_col}")
+            select_clause += f"{x_col}, AVG({y_col}) as AvgValue"
+            logger.info(f"Using standard aggregation for {y_col} (no area division)")
             
         group_by_clause = f" GROUP BY {x_col}"
         
