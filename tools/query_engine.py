@@ -7,6 +7,7 @@ Translates natural language queries to structured database operations.
 import os
 import re
 import json
+import time
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 # Import conditionally to handle missing dependencies gracefully
@@ -22,6 +23,7 @@ try:
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import JsonOutputParser
     from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import OperationalError
     LANGCHAIN_AVAILABLE = True
 except ImportError as e:
     LANGCHAIN_AVAILABLE = False
@@ -59,7 +61,15 @@ class QueryEngine:
         # Create database engine if connection is a string
         if isinstance(db_connection, str):
             try:
-                self.db_connection = create_engine(db_connection)
+                # Add pool health checks and conservative pool sizing
+                self.db_connection = create_engine(
+                    db_connection,
+                    pool_pre_ping=True,
+                    pool_recycle=1800,
+                    pool_timeout=30,
+                    pool_size=5,
+                    max_overflow=10,
+                )
             except Exception as e:
                 print(f"Error creating database engine: {e}")
                 self.db_connection = None
@@ -276,53 +286,79 @@ class QueryEngine:
         if self.db_connection is None:
             return {'error': 'No database connection available'}
             
-        try:
-            # Execute the query
-            if PANDAS_AVAILABLE:
-                # Use pandas to execute and get a DataFrame
-                result_df = pd.read_sql(sql_query, self.db_connection)
-                
-                # Convert to records for consistent return format
-                records = result_df.to_dict(orient='records')
-                
-                # Get basic stats for numerical columns
-                stats = {}
-                for col in result_df.select_dtypes(include=['number']).columns:
-                    stats[col] = {
-                        'mean': result_df[col].mean(),
-                        'min': result_df[col].min(),
-                        'max': result_df[col].max(),
-                        'median': result_df[col].median()
-                    }
-                
-                return {
-                    'records': records,
-                    'dataframe': result_df,
-                    'row_count': len(result_df),
-                    'column_count': len(result_df.columns),
-                    'columns': list(result_df.columns),
-                    'stats': stats,
-                    'sql_query': sql_query,
-                    'sql_explanation': translate_sql_to_english(sql_query)
-                }
-            else:
-                # Direct execution without pandas
-                with self.db_connection.connect() as conn:
-                    result = conn.execute(text(sql_query))
-                    records = [dict(zip(result.keys(), row)) for row in result.fetchall()]
+        # Retry loop for transient DB errors (e.g., MySQL 2013/2006)
+        attempts = 0
+        max_attempts = 3
+        backoff = 1.0
+        last_err = None
+        while attempts < max_attempts:
+            try:
+                # Execute the query
+                if PANDAS_AVAILABLE:
+                    # Use pandas to execute and get a DataFrame
+                    result_df = pd.read_sql(sql_query, self.db_connection)
                     
-                return {
-                    'records': records,
-                    'row_count': len(records),
-                    'column_count': len(records[0]) if records else 0,
-                    'columns': list(records[0].keys()) if records else [],
-                    'sql_query': sql_query,
-                    'sql_explanation': translate_sql_to_english(sql_query)
-                }
-                
-        except Exception as e:
-            print(f"Error executing SQL: {e}")
-            return {'error': str(e), 'sql_query': sql_query}
+                    # Convert to records for consistent return format
+                    records = result_df.to_dict(orient='records')
+                    
+                    # Get basic stats for numerical columns
+                    stats = {}
+                    for col in result_df.select_dtypes(include=['number']).columns:
+                        stats[col] = {
+                            'mean': result_df[col].mean(),
+                            'min': result_df[col].min(),
+                            'max': result_df[col].max(),
+                            'median': result_df[col].median()
+                        }
+                    
+                    return {
+                        'records': records,
+                        'dataframe': result_df,
+                        'row_count': len(result_df),
+                        'column_count': len(result_df.columns),
+                        'columns': list(result_df.columns),
+                        'stats': stats,
+                        'sql_query': sql_query,
+                        'sql_explanation': translate_sql_to_english(sql_query)
+                    }
+                else:
+                    # Direct execution without pandas
+                    with self.db_connection.connect() as conn:
+                        result = conn.execute(text(sql_query))
+                        records = [dict(zip(result.keys(), row)) for row in result.fetchall()]
+                        
+                    return {
+                        'records': records,
+                        'row_count': len(records),
+                        'column_count': len(records[0]) if records else 0,
+                        'columns': list(records[0].keys()) if records else [],
+                        'sql_query': sql_query,
+                        'sql_explanation': translate_sql_to_english(sql_query)
+                    }
+            except OperationalError as e:
+                # Check MySQL disconnect errors: 2013 (lost connection), 2006 (server gone away)
+                err_code = getattr(e.orig, 'args', [None])[0] if hasattr(e, 'orig') else None
+                if err_code in (2006, 2013):
+                    attempts += 1
+                    last_err = e
+                    try:
+                        # Dispose of pool to refresh stale connections
+                        if hasattr(self.db_connection, 'dispose'):
+                            self.db_connection.dispose()
+                    except Exception:
+                        pass
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                else:
+                    print(f"OperationalError executing SQL: {e}")
+                    return {'error': str(e), 'sql_query': sql_query}
+            except Exception as e:
+                print(f"Error executing SQL: {e}")
+                return {'error': str(e), 'sql_query': sql_query}
+        # If we exhausted retries
+        print(f"Error executing SQL after retries: {last_err}")
+        return {'error': str(last_err) if last_err else 'Unknown error', 'sql_query': sql_query}
             
     def _apply_filters(self, parsed_query: Dict[str, Any]) -> Dict[str, Any]:
         """

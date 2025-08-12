@@ -235,7 +235,19 @@ if DATABASE_AVAILABLE and LANGCHAIN_AVAILABLE:
         # Try to connect to the database using the environment variable
         DATABASE_URL = os.getenv("DATABASE_URL")
         if DATABASE_URL:
-            engine = create_engine(DATABASE_URL)
+            # Use connection pool health checks and sane defaults for MySQL
+            # - pool_pre_ping avoids stale connections
+            # - pool_recycle proactively refreshes connections (seconds)
+            # - pool_timeout limits waiting for a connection
+            # - pool_size/max_overflow control concurrency
+            engine = create_engine(
+                DATABASE_URL,
+                pool_pre_ping=True,
+                pool_recycle=1800,
+                pool_timeout=30,
+                pool_size=5,
+                max_overflow=10,
+            )
             
             # Initialize advanced visualization system if available
             viz_components = None
