@@ -15,6 +15,7 @@ from io import StringIO
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from dotenv import load_dotenv
 import traceback
 import contextlib
@@ -50,8 +51,15 @@ class DatabaseQueryTool:
         if not self.db_uri:
             raise ValueError("Database URI not provided and not found in environment variables")
         
-        # Create engine but defer connection until needed
-        self.engine = create_engine(self.db_uri)
+        # Create engine with pool health checks and sane defaults
+        self.engine = create_engine(
+            self.db_uri,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            pool_timeout=30,
+            pool_size=5,
+            max_overflow=10,
+        )
         logger.info(f"DatabaseQueryTool initialized with engine for {self.db_uri.split('@')[-1]}")
     
     def execute_query(self, query: str) -> List[Dict[str, Any]]:
@@ -71,35 +79,56 @@ class DatabaseQueryTool:
         start_time = datetime.now()
         logger.info(f"Executing query: {query}")
         
-        try:
-            # Execute the query
-            with self.engine.connect() as connection:
-                result = connection.execute(text(query))
-                
-                # Convert result to list of dictionaries
-                column_names = result.keys()
-                rows = result.fetchall()
-                
-                # Format the result
-                formatted_result = [
-                    {column: value for column, value in zip(column_names, row)}
-                    for row in rows
-                ]
-                
-                execution_time = (datetime.now() - start_time).total_seconds()
-                row_count = len(formatted_result)
-                logger.info(f"Query executed successfully in {execution_time:.2f}s. Returned {row_count} rows.")
-                
-                # Log first few rows for debugging
-                if formatted_result:
-                    sample = formatted_result[:3]
-                    logger.debug(f"Sample results: {sample}")
-                
-                return formatted_result
-                
-        except Exception as e:
-            logger.error(f"Query execution failed: {str(e)}")
-            raise
+        attempts = 0
+        max_attempts = 3
+        backoff = 1.0
+        last_err = None
+        while attempts < max_attempts:
+            try:
+                # Execute the query
+                with self.engine.connect() as connection:
+                    result = connection.execute(text(query))
+                    
+                    # Convert result to list of dictionaries
+                    column_names = result.keys()
+                    rows = result.fetchall()
+                    
+                    # Format the result
+                    formatted_result = [
+                        {column: value for column, value in zip(column_names, row)}
+                        for row in rows
+                    ]
+                    
+                    execution_time = (datetime.now() - start_time).total_seconds()
+                    row_count = len(formatted_result)
+                    logger.info(f"Query executed successfully in {execution_time:.2f}s. Returned {row_count} rows.")
+                    
+                    # Log first few rows for debugging
+                    if formatted_result:
+                        sample = formatted_result[:3]
+                        logger.debug(f"Sample results: {sample}")
+                    
+                    return formatted_result
+            except OperationalError as e:
+                err_code = getattr(e.orig, 'args', [None])[0] if hasattr(e, 'orig') else None
+                if err_code in (2006, 2013):
+                    attempts += 1
+                    last_err = e
+                    try:
+                        self.engine.dispose()
+                    except Exception:
+                        pass
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                else:
+                    logger.error(f"OperationalError during query: {str(e)}")
+                    raise
+            except Exception as e:
+                logger.error(f"Query execution failed: {str(e)}")
+                raise
+        logger.error(f"Query failed after retries: {last_err}")
+        raise last_err if last_err else RuntimeError("Unknown DB error")
     
     def get_table_schema(self, table_name: str) -> List[Dict[str, str]]:
         """
