@@ -1,0 +1,91 @@
+/* Custom styling inspired by datamares.org ecological monitoring theme */
+:root{
+  --primary:#007C91;      /* deep teal */
+  --secondary:#00A6B2;    /* aqua accent */
+  --bg:#F8FBFC;           /* page bg */
+  --panel:#E8F3F6;        /* card bg */
+  --text:#1B1F24;         /* near black */
+}
+
+/* Page background and text */
+html, body { background: var(--bg) !important; color: var(--text); }
+
+/* Streamlit default containers */
+section.main > div { padding-top: 0.5rem; }
+
+/* Center all text/content in main page area */
+.block-container { text-align: center; }
+.block-container h1, .block-container h2, .block-container h3,
+.block-container h4, .block-container h5, .block-container h6 { text-align: center; }
+
+/* Center branded header text explicitly */
+.eco-header, .eco-title, .eco-subtitle { text-align: center; }
+
+/* Chat area: left-align content overriding global centering */
+.stChatMessage { text-align: left !important; }
+.stChatMessage p,
+.stChatMessage li,
+.stChatMessage div,
+.stChatMessage pre,
+.stChatMessage code { text-align: left !important; }
+
+/* Center images */
+.stImage img { display: block; margin-left: auto; margin-right: auto; }
+
+/* Header banner */
+.eco-header{
+  background: linear-gradient(90deg, rgba(0,124,145,0.08), rgba(0,166,178,0.08));
+  border: 1px solid rgba(0,124,145,0.15);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin: 8px 0 16px 0;
+}
+.eco-title{ margin:0; font-weight:700; color:var(--primary); letter-spacing:0.2px; }
+.eco-subtitle{ margin:6px 0 0 0; color:#3a4a52; font-size:0.95rem; }
+
+/* Cards (use st.container with background) */
+.eco-card{
+  background: var(--panel);
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+/* Compact logos row under header */
+.eco-logos{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;            /* keep logos close together */
+  margin: 6px 0 4px 0; /* tight spacing below header */
+}
+.eco-logos img.logo{
+  max-height: 56px;    /* consistent small height */
+  width: auto;
+  display: block;
+}
+
+/* Buttons */
+.stButton button{
+  background: var(--primary) !important;
+  border: none !important;
+  color: white !important;
+  font-weight: 600;
+  border-radius: 8px !important;
+}
+.stButton button:hover{ filter: brightness(1.05); }
+
+/* Chat bubbles */
+.stChatMessage[data-testid="stChatMessageUser"]{ background: #ffffff; border:1px solid rgba(0,0,0,0.06); border-radius:12px; }
+.stChatMessage[data-testid="stChatMessageAssistant"]{ background: var(--panel); border:1px solid rgba(0,124,145,0.1); border-radius:12px; }
+
+/* Tables */
+/* Keep tables/dataframes left-aligned for readability but center block on page */
+.dataframe { margin-left: auto; margin-right: auto; text-align: left; }
+.stTable { margin-left: auto; margin-right: auto; text-align: left; display: inline-block; }
+.dataframe tbody tr:hover { background: rgba(0,166,178,0.08); }
+
+/* Scrollbar (WebKit) */
+*::-webkit-scrollbar{ width: 10px; height:10px }
+*::-webkit-scrollbar-thumb{ background: rgba(0,124,145,0.3); border-radius: 10px }
+*::-webkit-scrollbar-track{ background: rgba(0,0,0,0.03) }

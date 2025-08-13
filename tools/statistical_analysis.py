@@ -566,6 +566,13 @@ def format_statistical_results(results: Dict, test_name: str) -> str:
     # Add basic info about what's in the results
     output.append(f"Result keys: {list(results.keys())}")
     
+    # Safe float formatter
+    def _fmt(val, nd=4):
+        try:
+            return f"{float(val):.{nd}f}"
+        except Exception:
+            return str(val)
+
     # Sample size information
     if "sample_size" in results:
         output.append(f"Sample Size: {results['sample_size']}")
@@ -573,18 +580,18 @@ def format_statistical_results(results: Dict, test_name: str) -> str:
     # Test-specific formatting
     if "t_statistic" in results:
         output.extend([
-            f"t-statistic: {results['t_statistic']:.4f}",
-            f"p-value: {results['p_value']:.4f}",
+            f"t-statistic: {_fmt(results.get('t_statistic'))}",
+            f"p-value: {_fmt(results.get('p_value'))}",
             f"Significant: {'Yes' if results.get('significant', False) else 'No'}",
-            f"Effect Size (Cohen's d): {results.get('effect_size_cohen_d', 'N/A'):.4f}",
+            f"Effect Size (Cohen's d): {_fmt(results.get('effect_size_cohen_d', 'N/A'))}",
             f"Effect Size Interpretation: {results.get('effect_size_interpretation', 'N/A')}"
         ])
     
     elif "f_statistic" in results and "anova_table" not in results:
         # This is for simple ANOVA results (not the complex statsmodels output)
         output.extend([
-            f"F-statistic: {results['f_statistic']:.4f}",
-            f"p-value: {results['p_value']:.4f}",
+            f"F-statistic: {_fmt(results.get('f_statistic'))}",
+            f"p-value: {_fmt(results.get('p_value'))}",
             f"Significant: {'Yes' if results.get('significant', False) else 'No'}"
         ])
         
@@ -610,7 +617,7 @@ def format_statistical_results(results: Dict, test_name: str) -> str:
                     f_val = values['F'][0] if isinstance(values['F'], list) else values['F']
                     p_val = values['PR(>F)'][0] if isinstance(values['PR(>F)'], list) else values['PR(>F)']
                     significant = "Yes" if p_val < 0.05 else "No"
-                    output.append(f"{source}\t\t{f_val:.4f}\t{p_val:.4f}\t{significant}")
+                    output.append(f"{source}\t\t{_fmt(f_val)}\t{_fmt(p_val)}\t{significant}")
         except Exception as e:
             output.append(f"Note: ANOVA table formatting error: {e}")
             
@@ -628,17 +635,17 @@ def format_statistical_results(results: Dict, test_name: str) -> str:
     
     elif "r_squared" in results:
         output.extend([
-            f"R-squared: {results['r_squared']:.4f}",
-            f"Adjusted R-squared: {results['adjusted_r_squared']:.4f}",
-            f"F-statistic: {results['f_statistic']:.4f}",
-            f"Model p-value: {results['f_pvalue']:.4f}",
+            f"R-squared: {_fmt(results.get('r_squared'))}",
+            f"Adjusted R-squared: {_fmt(results.get('adjusted_r_squared'))}",
+            f"F-statistic: {_fmt(results.get('f_statistic'))}",
+            f"Model p-value: {_fmt(results.get('f_pvalue'))}",
             f"Model Significance: {results.get('model_significance', 'N/A')}"
         ])
     
     elif "statistic" in results:  # Non-parametric tests
         output.extend([
-            f"Test Statistic: {results['statistic']:.4f}",
-            f"p-value: {results['p_value']:.4f}"
+            f"Test Statistic: {_fmt(results.get('statistic'))}",
+            f"p-value: {_fmt(results.get('p_value'))}"
         ])
     
     return "\n".join(output)
