@@ -1,0 +1,19 @@
+[theme]
+# Inspired by https://datamares.org/ecological_monitoring/
+# Clean marine palette: deep teal + aqua accents, light backgrounds
+primaryColor = "#007C91"          # deep teal (links, accents)
+backgroundColor = "#F8FBFC"       # off-white page background
+secondaryBackgroundColor = "#E8F3F6"  # light aqua panels/containers
+textColor = "#1B1F24"             # near-black body text
+font = "sans serif"               # system sans (SF on macOS)
+
+[server]
+headless = true
+port = 8501
+
+[client]
+showErrorDetails = true
+
+[browser]
+# You can set a favicon here if you add one under assets/favicon.png and
+# call st.set_page_config(page_icon="assets/favicon.png") in the app.

@@ -471,6 +471,13 @@ class VisualizationTool:
             raise
 
 # Instantiate the tools for direct import
-database_query_tool = DatabaseQueryTool().execute_query
+try:
+    # Initialize only if DB credentials are available; otherwise keep None and log
+    database_query_tool = DatabaseQueryTool().execute_query
+except Exception as e:
+    logger.warning(f"DatabaseQueryTool not initialized at import time: {e}")
+    database_query_tool = None
+
+# These do not require external credentials and are safe to initialize
 python_interpreter_tool = PythonInterpreterTool().execute_code
 visualization_tool = VisualizationTool().create_visualization

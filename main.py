@@ -6,6 +6,9 @@ import threading
 import sys
 from datetime import datetime
 import re
+import difflib
+import unicodedata
+from functools import lru_cache
 from typing import Optional, Dict, List, Union, Tuple, Any
 
 # Import our SQL formatter and data validator from tools folder
@@ -78,11 +81,18 @@ except ImportError:
 
 # Database dependencies
 try:
-    from sqlalchemy import create_engine
+    from sqlalchemy import create_engine, text
     DATABASE_AVAILABLE = True
 except ImportError:
     print("Warning: sqlalchemy not installed. Database capabilities will be disabled.")
     DATABASE_AVAILABLE = False
+
+# Optional, better fuzzy matching
+try:
+    from rapidfuzz import fuzz, process as rf_process
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
 
 # Try to import dotenv, but make it optional
 try:
@@ -271,9 +281,210 @@ if DATABASE_AVAILABLE and LANGCHAIN_AVAILABLE:
     except Exception as e:
         print(f"Error connecting to database: {e}")
         DATABASE_AVAILABLE = False
-else:
-    print("Database connection skipped due to missing dependencies.")
-    DATABASE_AVAILABLE = False
+
+# --- Reference data and fuzzy matching helpers ---
+
+def _strip_accents(s: str) -> str:
+    """Remove accents/diacritics for robust matching."""
+    if s is None:
+        return ""
+    try:
+        return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    except Exception:
+        return s
+
+@lru_cache(maxsize=1)
+def get_reference_values() -> Dict[str, List[str]]:
+    """Load distinct reef and species terms from the database (cached)."""
+    refs = {"reef_names": [], "species_terms": []}
+    try:
+        if not DATABASE_AVAILABLE or engine is None:
+            return refs
+        with engine.connect() as conn:
+            # Reefs
+            try:
+                reef_rows = conn.execute(
+                    text("SELECT DISTINCT Reef FROM ltem_optimized_regions WHERE Reef IS NOT NULL AND TRIM(Reef) <> ''")
+                ).fetchall()
+                refs["reef_names"] = sorted({str(r[0]).strip() for r in reef_rows if r and r[0]})
+            except Exception as e:
+                print(f"Warning: could not load reef names: {e}")
+            # Species terms: robust to schema differences
+            try:
+                # Inspect available columns
+                cols = []
+                try:
+                    col_rows = conn.execute(text("SHOW COLUMNS FROM ltem_monitoring_species")).fetchall()
+                    cols = [str(r[0]).strip() for r in col_rows]
+                except Exception:
+                    # Fallback for engines that don't support SHOW COLUMNS
+                    # Try a lightweight select limit 1 to infer keys from result metadata
+                    try:
+                        probe = conn.execute(text("SELECT * FROM ltem_monitoring_species LIMIT 1"))
+                        cols = list(probe.keys())
+                    except Exception:
+                        cols = []
+
+                cols_lower = {c.lower(): c for c in cols}
+                terms = set()
+
+                # Helper to add non-empty trimmed strings
+                def _add_safe(values):
+                    for v in values:
+                        if v is not None:
+                            s = str(v).strip()
+                            if s:
+                                terms.add(s)
+
+                # Prefer explicit Genus/Species if present (any casing)
+                if 'genus' in cols_lower and 'species' in cols_lower:
+                    q = text(f"SELECT DISTINCT `{cols_lower['genus']}`, `{cols_lower['species']}` FROM ltem_monitoring_species")
+                    for g, s in conn.execute(q).fetchall():
+                        _add_safe([g, s])
+                else:
+                    # Try common alternates
+                    candidates = [
+                        'scientific_name', 'binomial', 'species_name', 'taxon', 'taxon_name', 'species', 'genus'
+                    ]
+                    present = [cols_lower[k] for k in candidates if k in cols_lower]
+                    for col in present:
+                        q = text(f"SELECT DISTINCT `{col}` FROM ltem_monitoring_species WHERE `{col}` IS NOT NULL AND TRIM(`{col}`) <> ''")
+                        _add_safe([r[0] for r in conn.execute(q).fetchall()])
+
+                refs["species_terms"] = sorted(terms)
+            except Exception as e:
+                print(f"Warning: could not load species terms: {e}")
+    except Exception as e:
+        print(f"Warning: reference load failed: {e}")
+    return refs
+
+def _normalize(s: str) -> str:
+    """Lowercase, strip accents, collapse whitespace, and simplify punctuation for matching."""
+    s = _strip_accents(s or "")
+    s = s.lower()
+    # Keep letters, digits, spaces, hyphens and apostrophes; replace others with space
+    s = re.sub(r"[^a-z0-9\s'\-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _extract_location_cues(text: str) -> List[str]:
+    """Extract simple locality cues like 'in La Paz', 'at Cabo Pulmo'. Normalized."""
+    cues = set()
+    if not text:
+        return []
+    for m in re.finditer(r"\b(?:in|at|near|around|off)\s+([A-Za-zÀ-ÿ'-]+(?:\s+[A-Za-zÀ-ÿ'-]+)?)", text, flags=re.IGNORECASE):
+        cues.add(_normalize(m.group(1)))
+    # Also add common 2-gram windows to catch cases without prepositions
+    words = [w for w in re.findall(r"[A-Za-zÀ-ÿ'-]+", text) if len(w) >= 3]
+    for i in range(len(words) - 1):
+        cues.add(_normalize(words[i] + " " + words[i+1]))
+    return [c for c in cues if c]
+
+def _find_exact_substring_matches(text: str, candidates: List[str]) -> List[str]:
+    """Find normalized substring and token-contained matches."""
+    t = _normalize(text)
+    hits = []
+    for c in candidates:
+        cn = _normalize(c)
+        if not cn:
+            continue
+        if cn in t:
+            hits.append(c)
+            continue
+        # token containment heuristic: all tokens of candidate appear in text
+        toks = [tok for tok in cn.split() if len(tok) >= 3]
+        if toks and all(tok in t for tok in toks):
+            hits.append(c)
+    return hits
+
+def _suggest_from_question(text: str, candidates: List[str], topn: int = 5) -> List[str]:
+    """Suggest closest candidates using RapidFuzz if available, else difflib.
+    Applies light locality filtering to narrow search space when possible.
+    """
+    if not text or not candidates:
+        return []
+    qn = _normalize(text)
+
+    # Optional: filter candidates by locality cues present in the question
+    cues = _extract_location_cues(text)
+    cand_pool = candidates
+    if cues:
+        subset = []
+        for c in candidates:
+            cn = _normalize(c)
+            if any(cue and cue in cn for cue in cues):
+                subset.append(c)
+        if 0 < len(subset) <= max(50, len(candidates)//2):  # only narrow if meaningfully reduces
+            cand_pool = subset
+
+    if 'RAPIDFUZZ_AVAILABLE' in globals() and RAPIDFUZZ_AVAILABLE:
+        # RapidFuzz token_set_ratio is robust to word order and duplicates
+        # Build a list of (candidate, normalized) to avoid recomputing in scorer
+        norm_map = {c: _normalize(c) for c in cand_pool}
+        def scorer(cand: str) -> int:
+            return fuzz.token_set_ratio(qn, norm_map[cand])
+        results = sorted(((c, scorer(c)) for c in cand_pool), key=lambda x: x[1], reverse=True)
+        # Keep suggestions with reasonable confidence
+        suggestions = [c for c, s in results if s >= 65][:topn]
+        return suggestions
+    else:
+        # Fallback to difflib using grams as in previous version
+        words = [w for w in re.findall(r"[A-Za-zÀ-ÿ'-]+", text) if len(w) >= 3]
+        grams = set()
+        for i in range(len(words)):
+            for L in (1, 2, 3):
+                if i + L <= len(words):
+                    grams.add(" ".join(words[i:i+L]))
+        scored = {}
+        for cand in cand_pool:
+            best = 0.0
+            cn = _normalize(cand)
+            for g in grams:
+                score = difflib.SequenceMatcher(None, _normalize(g), cn).ratio()
+                if score > best:
+                    best = score
+            scored[cand] = best
+        suggestions = [c for c, s in sorted(scored.items(), key=lambda x: x[1], reverse=True) if s >= 0.6]
+        return suggestions[:topn]
+
+def maybe_request_clarification(user_question: str) -> Optional[str]:
+    """If question mentions reefs or species and no exact matches are found, suggest alternatives."""
+    q = user_question or ""
+    ql = q.lower()
+    intents_reef = any(k in ql for k in ["reef", "reefs", "site", "sites", "location", "locations"]) 
+    intents_species = any(k in ql for k in ["species", "fish", "fishes", "taxa", "genus"]) 
+    if not (intents_reef or intents_species):
+        return None
+    refs = get_reference_values()
+
+    # Reefs
+    if intents_reef and refs.get("reef_names"):
+        reef_names = refs["reef_names"]
+        # Try exact/contained first
+        hits = _find_exact_substring_matches(q, reef_names)
+        if not hits:
+            # Better suggestions with locality-aware filtering
+            sugg = _suggest_from_question(q, reef_names, topn=5)
+            if sugg:
+                return (
+                    "I couldn't find an exact reef match. Did you mean one of these?\n- " + "\n- ".join(sugg) +
+                    "\nPlease confirm the correct reef name."
+                )
+
+    # Species
+    if intents_species and refs.get("species_terms"):
+        terms = refs["species_terms"]
+        hits = _find_exact_substring_matches(q, terms)
+        if not hits:
+            sugg = _suggest_from_question(q, terms, topn=5)
+            if sugg:
+                return (
+                    "I couldn't find an exact species match. Possible alternatives:\n- " + "\n- ".join(sugg) +
+                    "\nPlease confirm the correct species or genus."
+                )
+    return None
+
+ 
 
 # --- LLM Initialization ---
 llm = None
@@ -290,7 +501,8 @@ if LANGCHAIN_AVAILABLE:
         # --- Create a prompt template that includes our system prompt ---
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PROMPT),
-            # Removed chat history placeholder to eliminate between-question memory
+            # Include chat history so the agent can remember context between turns
+            MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
@@ -427,6 +639,8 @@ def calculate_average_density(
     
     # Escape '%' for logging to prevent format string errors with SQL LIKE patterns
     safe_where = where_clause.replace('%', '%%') if isinstance(where_clause, str) else where_clause
+    # Escape '%' for DB-API execution as well to avoid old-style percent formatting interpretation
+    db_where = where_clause.replace('%', '%%') if isinstance(where_clause, str) else where_clause
     log_progress(f"Calculating average {metric} density grouped by {group_by} with filter: {safe_where}", is_reasoning=True)
     
     # Construct SQL query for calculating average density
@@ -438,7 +652,7 @@ def calculate_average_density(
     FROM 
         ltem_optimized_regions
     WHERE 
-        {where_clause}
+        {db_where}
     GROUP BY 
         {group_by}, Year, Region, Reef, Depth2, Transect
     """
@@ -697,6 +911,20 @@ def _perform_regression_analysis(data: pd.DataFrame, dependent_var: str,
                                 independent_vars: list, alpha: float = 0.05) -> str:
     """Perform regression analysis on the data."""
     try:
+        # Normalize independent_vars input (can be str, list, or mis-specified dict)
+        if isinstance(independent_vars, str):
+            independent_vars = [independent_vars]
+        elif isinstance(independent_vars, dict):
+            # Common agent mistake: passing a dict with a key
+            # Try typical keys, otherwise fail fast with a helpful error
+            for key in ("independent_vars", "x", "features"):
+                if key in independent_vars and isinstance(independent_vars[key], (list, str)):
+                    val = independent_vars[key]
+                    independent_vars = [val] if isinstance(val, str) else list(val)
+                    break
+            else:
+                return "Error: 'independent_vars' should be a list or string. Received a dict without a usable key."
+
         if dependent_var not in data.columns:
             return f"Error: Dependent variable '{dependent_var}' not found in data."
         
@@ -704,7 +932,24 @@ def _perform_regression_analysis(data: pd.DataFrame, dependent_var: str,
         if missing_vars:
             return f"Error: Independent variables not found: {missing_vars}"
         
-        results = perform_regression_analysis(data, dependent_var, independent_vars, alpha)
+        # Attempt to coerce numeric types when possible (e.g., Year)
+        df = data.copy()
+        try:
+            if df[dependent_var].dtype.kind not in ("i", "u", "f"):
+                df[dependent_var] = pd.to_numeric(df[dependent_var], errors="coerce")
+        except Exception:
+            pass
+        for v in independent_vars:
+            try:
+                if df[v].dtype.kind not in ("i", "u", "f"):
+                    df[v] = pd.to_numeric(df[v], errors="coerce")
+            except Exception:
+                pass
+        df = df[[dependent_var] + independent_vars].dropna()
+        if len(df) < len(independent_vars) + 2:
+            return "Error: Insufficient numeric data for regression analysis after cleaning."
+
+        results = perform_regression_analysis(df, dependent_var, independent_vars, alpha)
         return format_statistical_results(results, "Linear Regression Analysis")
         
     except Exception as e:
@@ -1373,13 +1618,18 @@ else:
 
 # Add visualization tool if all required dependencies are available
 if LANGCHAIN_AVAILABLE and VISUALIZATION_AVAILABLE:
-    # Add the charting tool
-    charting_tool = Tool(
-        name="create_chart",
-        func=create_chart,
-        description="Creates a chart from SQL query results. Parameters: query (SQL to execute), chart_type (bar, line, scatter), title, filename"
-    )
-    all_tools.append(charting_tool)
+    # Ensure charting tool is added once and uses the wrapper to parse inputs
+    try:
+        already_added = any(getattr(t, 'name', '') == 'create_chart' for t in all_tools)
+    except Exception:
+        already_added = False
+    if not already_added:
+        charting_tool = Tool(
+            name="create_chart",
+            func=plotting_tool_wrapper(create_chart),
+            description="Creates a chart from SQL query results. Parameters: query (SQL to execute), chart_type (bar, line, scatter), title, filename"
+        )
+        all_tools.append(charting_tool)
     
     # Add advanced visualization tool if available
     if 'ADVANCED_VIZ_AVAILABLE' in globals() and ADVANCED_VIZ_AVAILABLE and advanced_viz_tool_func:
@@ -1723,7 +1973,7 @@ else:
     print("\n❌ Cannot create agent due to missing core dependencies.")
 
 # --- Agent Analysis Function ---
-def run_analysis(user_question: str) -> str:
+def run_analysis(user_question: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
     """
     Runs the full analysis pipeline for a given user question.
     This function is designed to be called from a GUI.
@@ -1735,17 +1985,64 @@ def run_analysis(user_question: str) -> str:
     print(f"Starting analysis for: {user_question}")
     start_time = time.time()
 
+    # If the question mentions reefs/species but no direct matches are found,
+    # ask for clarification with suggestions before running expensive analysis
     try:
-        # Execute the agent with the user's question
-        response = agent_executor.invoke({
-            "input": user_question
-        })
+        clarification = maybe_request_clarification(user_question)
+        if clarification:
+            return clarification
+    except Exception:
+        pass
+
+    try:
+        # Prepare chat history messages (token-safe: keep last 6 turns max)
+        lc_history = []
+        try:
+            if chat_history and isinstance(chat_history, list):
+                # Keep only the last 6 messages (3 user/assistant pairs)
+                trimmed = chat_history[-6:]
+                for m in trimmed:
+                    role = (m or {}).get("role")
+                    content = (m or {}).get("content", "")
+                    if not isinstance(content, str):
+                        content = str(content)
+                    if role == "user":
+                        lc_history.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        lc_history.append(AIMessage(content=content))
+        except Exception:
+            lc_history = []
+
+        # Execute the agent with the user's question and optional history
+        payload = {"input": user_question}
+        if lc_history:
+            payload["chat_history"] = lc_history
+        response = agent_executor.invoke(payload)
 
         # Sanitize the response
         sanitized_output = response["output"]
         if data_validator is not None:
             print("Validating response...")
-            sanitized_output = data_validator.sanitize_response(response["output"])
+            sanitized_output = data_validator.sanitize_response(response["output"]) 
+
+        # Redact internal details such as raw SQL echoes and label jargon
+        def _redact(text: str) -> str:
+            if not isinstance(text, str):
+                return text
+            # Remove lines that disclose internal queries
+            lines = []
+            for ln in text.splitlines():
+                if re.search(r"^\s*(Query|SQL) used\s*:\s*", ln, flags=re.IGNORECASE):
+                    continue
+                lines.append(ln)
+            redacted = "\n".join(lines)
+            # Remove parenthetical Label specifications like (Label = 'PEC')
+            redacted = re.sub(r"\(\s*Label\s*=\s*['\"]?PEC['\"]?\s*\)", "", redacted, flags=re.IGNORECASE)
+            # Tidy multiple spaces left by removals
+            redacted = re.sub(r"\s{2,}", " ", redacted)
+            return redacted.strip()
+
+        sanitized_output = _redact(sanitized_output)
         
         total_elapsed = time.time() - start_time
         print(f"Analysis complete in {total_elapsed:.2f} seconds.")
